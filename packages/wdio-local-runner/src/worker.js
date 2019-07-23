@@ -6,16 +6,9 @@ import logger from '@wdio/logger'
 
 import RunnerTransformStream from './transformStream'
 import ReplQueue from './replQueue'
-import RunnerStream from './stdStream'
-import { removeLastListener } from './utils'
 
 const log = logger('@wdio/local-runner')
 const replQueue = new ReplQueue()
-
-const stdOutStream = new RunnerStream()
-const stdErrStream = new RunnerStream()
-stdOutStream.pipe(process.stdout)
-stdErrStream.pipe(process.stderr)
 
 /**
  * WorkerInstance
@@ -34,7 +27,12 @@ export default class WorkerInstance extends EventEmitter {
      * @param  {number}   retries     number of retries remaining
      * @param  {object}   execArgv    execution arguments for the test run
      */
-    constructor (config, { cid, configFile, caps, specs, server, execArgv, retries }, stdout, stderr) {
+    constructor(
+        config,
+        { cid, configFile, caps, specs, server, execArgv, retries },
+        stdout,
+        stderr
+    ) {
         super()
         this.cid = cid
         this.config = config
@@ -52,7 +50,7 @@ export default class WorkerInstance extends EventEmitter {
     /**
      * spawns process to kick of wdio-runner
      */
-    startProcess () {
+    startProcess() {
         const { cid, execArgv } = this
         const argv = process.argv.slice(2)
 
@@ -61,38 +59,43 @@ export default class WorkerInstance extends EventEmitter {
         })
 
         if (this.config.outputDir) {
-            runnerEnv.WDIO_LOG_PATH = path.join(this.config.outputDir, `wdio-${cid}.log`)
+            runnerEnv.WDIO_LOG_PATH = path.join(
+                this.config.outputDir,
+                `wdio-${cid}.log`
+            )
         }
 
         log.info(`Start worker ${cid} with arg: ${argv}`)
-        const childProcess = this.childProcess = child.fork(path.join(__dirname, 'run.js'), argv, {
-            cwd: process.cwd(),
-            env: runnerEnv,
-            execArgv,
-            silent: true
-        })
+        const childProcess = (this.childProcess = child.fork(
+            path.join(__dirname, 'run.js'),
+            argv,
+            {
+                cwd: process.cwd(),
+                env: runnerEnv,
+                execArgv,
+                stdio: this.config.preserveLoggingFormat ? 'inherit' : 'pipe'
+            }
+        ))
 
         childProcess.on('message', ::this._handleMessage)
         childProcess.on('error', ::this._handleError)
         childProcess.on('exit', ::this._handleExit)
 
         /* istanbul ignore if */
-        if (!process.env.JEST_WORKER_ID) {
-            childProcess.stdout.pipe(new RunnerTransformStream(cid)).pipe(stdOutStream)
-            childProcess.stderr.pipe(new RunnerTransformStream(cid)).pipe(stdErrStream)
+        if (!process.env.JEST_WORKER_ID && !this.config.preserveLoggingFormat) {
+            childProcess.stdout
+                .pipe(new RunnerTransformStream(cid))
+                .pipe(process.stdout)
+            childProcess.stderr
+                .pipe(new RunnerTransformStream(cid))
+                .pipe(process.stderr)
             process.stdin.pipe(childProcess.stdin)
-
-            /**
-             * Remove events that are automatically created by Readable stream
-             */
-            removeLastListener(process.stdin, 'data')
-            removeLastListener(process.stdin, 'end')
         }
 
         return childProcess
     }
 
-    _handleMessage (payload) {
+    _handleMessage(payload) {
         const { cid, childProcess } = this
 
         /**
@@ -124,7 +127,7 @@ export default class WorkerInstance extends EventEmitter {
                 childProcess,
                 { prompt: `[${cid}] \u203A `, ...payload.params },
                 () => this.emit('message', Object.assign(payload, { cid })),
-                (ev) => this.emit('message', ev)
+                ev => this.emit('message', ev)
             )
             return replQueue.next()
         }
@@ -132,19 +135,23 @@ export default class WorkerInstance extends EventEmitter {
         /**
          * handle debugger results
          */
-        if (replQueue.isRunning && payload.origin === 'debugger' && payload.name === 'result') {
+        if (
+            replQueue.isRunning &&
+            payload.origin === 'debugger' &&
+            payload.name === 'result'
+        ) {
             replQueue.runningRepl.onResult(payload.params)
         }
 
         this.emit('message', Object.assign(payload, { cid }))
     }
 
-    _handleError (payload) {
+    _handleError(payload) {
         const { cid } = this
         this.emit('error', Object.assign(payload, { cid }))
     }
 
-    _handleExit (exitCode) {
+    _handleExit(exitCode) {
         const { cid, childProcess, specs, retries } = this
 
         /**
@@ -164,11 +171,13 @@ export default class WorkerInstance extends EventEmitter {
      * @param  {object} argv     arguments for functions to call
      * @return null
      */
-    postMessage (command, argv) {
+    postMessage(command, argv) {
         const { cid, configFile, caps, specs, server, retries, isBusy } = this
 
         if (isBusy && command !== 'endSession') {
-            return log.info(`worker with cid ${cid} already busy and can't take new commands`)
+            return log.info(
+                `worker with cid ${cid} already busy and can't take new commands`
+            )
         }
 
         /**
@@ -179,7 +188,16 @@ export default class WorkerInstance extends EventEmitter {
             this.childProcess = this.startProcess()
         }
 
-        this.childProcess.send({ cid, command, configFile, argv, caps, specs, server, retries })
+        this.childProcess.send({
+            cid,
+            command,
+            configFile,
+            argv,
+            caps,
+            specs,
+            server,
+            retries
+        })
         this.isBusy = true
     }
 }
